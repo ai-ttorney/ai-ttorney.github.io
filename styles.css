@@ -1,0 +1,214 @@
+/* Reset and General Styles */
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+    font-family: Arial, sans-serif;
+}
+
+/* Sidebar Styling */
+.sidebar {
+    width: 250px;
+    background-color: #1E2A47; /* Dark blue similar to the background color in the prototype */
+    color: #fff;
+    padding: 20px;
+    position: fixed;
+    height: 100vh;
+    left: -250px; /* Hidden by default */
+    transition: left 0.3s ease; /* Smooth slide animation */
+}
+
+.sidebar.open {
+    left: 0; /* Show sidebar */
+}
+
+.logo img {
+    width: 100%;
+    height: auto;
+    margin-bottom: 20px;
+}
+
+.profile {
+    display: flex;
+    align-items: center;
+    margin-bottom: 20px;
+}
+
+.profile-photo {
+    width: 50px;
+    height: 50px;
+    
+    margin-right: 10px;
+}
+
+.user-name {
+    font-size: 1.2em;
+    font-weight: bold;
+}
+
+.conversations h3 {
+    font-size: 1.2em;
+    margin-bottom: 10px;
+}
+
+.conversations ul {
+    list-style-type: none;
+    padding: 0;
+    font-size: 0.9em;
+}
+
+.conversations li {
+    padding: 5px 0;
+    cursor: pointer;
+    border-bottom: 1px solid #3A4660; /* Lighter dark blue */
+}
+
+.settings-button {
+    background-color: #444;
+    color: #fff;
+    padding: 10px 15px;
+    border: none;
+    cursor: pointer;
+    width: 100%;
+    margin-top: 20px;
+    font-size: 1em;
+}
+
+.settings-button:hover {
+    background-color: #3A4660;
+}
+
+/* Sidebar Toggle Button */
+.sidebar-toggle {
+    position: fixed;
+    left: 10px;
+    top: 10px;
+    font-size: 1.5em;
+    background-color: #1E2A47;
+    color: #fff;
+    border: none;
+    padding: 10px;
+    cursor: pointer;
+    z-index: 10;
+}
+
+.sidebar-toggle:hover {
+    background-color: #3A4660;
+}
+
+/* Main Chat Area Styling */
+.main-container {
+    margin-left: 0; /* Adjust when sidebar is hidden */
+    padding: 20px;
+    background-color: #1E2A47; /* Dark blue background for main area */
+    color: #fff;
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    transition: margin-left 0.3s ease;
+}
+
+.main-container.shifted {
+    margin-left: 250px; /* Shift when sidebar is visible */
+}
+
+.upload-btn {
+    align-self: flex-end;
+    margin-bottom: 10px;
+    padding: 10px 15px;
+    background-color: #3A4660; /* Matching sidebar's border color */
+    color: #fff;
+    border: none;
+    cursor: pointer;
+    font-size: 1em;
+}
+
+.upload-btn:hover {
+    background-color: #5677B0; /* Slightly lighter teal-blue */
+}
+
+.chat-container {
+    display: flex;
+    flex-direction: column;
+    flex-grow: 1;
+    overflow-y: auto;
+    padding: 10px;
+    border: 1px solid #3A4660;
+    margin-bottom: 10px;
+    background-color: #222;
+}
+
+/* User Message Styling */
+.user-message {
+    background-color: #5677B0; /* Teal-blue color */
+    color: #fff;
+    padding: 10px;
+    margin: 8px 0;
+    border-radius: 8px;
+    align-self: flex-end; /* Aligns user message to the right */
+    max-width: 60%;
+    word-wrap: break-word;
+    font-size: 3em; 
+}
+
+/* Bot Message Styling */
+.bot-message {
+    background-color: #3A4660; /* Slightly lighter than the main background */
+    color: #fff;
+    padding: 10px;
+    margin: 8px 0;
+    border-radius: 8px;
+    align-self: flex-start; /* Aligns bot message to the left */
+    max-width: 60%;
+    word-wrap: break-word;
+    font-size: 3em; 
+}
+
+
+/* Message Input Styling */
+.message-input {
+    display: flex;
+    align-items: center;
+    border-top: 1px solid #3A4660;
+    padding: 10px 0;
+}
+
+.message-input input {
+    flex-grow: 1;
+    padding: 10px;
+    border: none;
+    background-color: #3A4660; /* Dark blue background matching theme */
+    color: #fff;
+    border-radius: 5px;
+    margin-right: 10px;
+}
+
+.message-input button {
+    padding: 10px 15px;
+    background-color: #5677B0;
+    color: #fff;
+    border: none;
+    cursor: pointer;
+}
+
+.message-input button:hover {
+    background-color: #789CC4; /* Lighter teal-blue on hover */
+}
+
+/* Scrollbar Styling */
+.chat-container::-webkit-scrollbar {
+    width: 10px;
+}
+
+.chat-container::-webkit-scrollbar-track {
+    background: #333;
+}
+
+.chat-container::-webkit-scrollbar-thumb {
+    background-color: #5677B0; /* Teal-blue matching user message */
+    border-radius: 5px;
+}
+
+.chat-container::-webkit-scrollbar-thumb:hover {
+    background: #789CC4; /* Lighter teal-blue on hover */
+}
