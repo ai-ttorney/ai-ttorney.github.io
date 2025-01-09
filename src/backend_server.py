@@ -25,7 +25,7 @@ def generate():
     try:
         # Construct the 'messages' array for ChatCompletion
         messages = [
-            {"role": "system", "content": "AI-ttorney is a financial law advice chatbot and will only answer questions related to Turkey's financial law. For all other questions, it must respond: 'AI-ttorney can't answer the questions outside of Turkey's financial law."},
+            {"role": "system", "content": "AI-ttorney is a financial law advice chatbot and will only answer questions related to Turkey's financial law. For all other questions, it must indicate that he is only trained for Turkey's financial law."},
             {"role": "user", "content": prompt}
         ]
 
