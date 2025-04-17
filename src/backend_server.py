@@ -27,6 +27,10 @@ import sys
 from urllib.parse import quote_plus
 from pymongo import MongoClient
 from pymongo.errors import ConnectionFailure
+from sqlalchemy.orm import Session
+from database import get_db
+from models import ChatSession, ChatMessage
+from crud import create_chat_session, create_chat_message, get_user_sessions, get_session_messages
 
 
 load_dotenv()
@@ -47,9 +51,9 @@ if not openai.api_key:
 
 # Initialize LangChain components
 try:
-    embeddings = OpenAIEmbeddings()
+    embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
     llm = ChatOpenAI(
-        temperature=0,
+        temperature=0.5,
         model_name="ft:gpt-4o-mini-2024-07-18:aittorney::BMdnAFFk",
     )
 except Exception as e:
@@ -72,13 +76,14 @@ class ThreadMetadata:
         self.title = "New Conversation"
         self.last_message = None
         self.is_initial = True
+        self.db_session_id = None
 
 # In-memory storage for active sessions
 user_threads = {}
 user_queues = {}
 thread_metadata = {}
 
-# Custom tools for the agent
+# RAG agent 
 @tool
 def search_document(query: str, doc_id: str) -> str:
     """Search for information in the document using the query."""
@@ -121,6 +126,7 @@ def get_document_summary(doc_id: str) -> str:
         logger.error(f"Error in get_document_summary: {str(e)}")
         return f"Error getting document summary: {str(e)}"
 
+
 def create_document_agent(doc_id: str):
     tools = [
         Tool(
@@ -146,39 +152,8 @@ def create_document_agent(doc_id: str):
             return_messages=True
         )
     )
-
-def process_chat(thread_id: str):
-    """Process chat messages and generate AI responses"""
-    while True:
-        prompt = user_queues[thread_id].get()
-        history = user_threads[thread_id]
-        history.add_user_message(prompt)
-        
-        messages = [
-            {"role": "system", "content": "AI-ttorney is a financial law advice chatbot and will only answer questions related to Turkey's financial law. For all other questions, it must say that it is only trained for Turkey's financial law."},
-            {"role": "user", "content": prompt}
-        ]
-        
-        for msg in history.messages:
-            role = "user" if msg.type == "human" else "assistant"
-            messages.append({"role": role, "content": msg.content})
-        
-        try:
-            response = openai.ChatCompletion.create(
-                model="ft:gpt-4o-mini-2024-07-18:aittorney::BMdnAFFk",
-                messages=messages,
-                max_tokens=100
-            )
-            print(response)  # buraya ekle
-            ai_response = response['choices'][0]['message']['content']
-            history.add_ai_message(ai_response)
-        except Exception as e:
-            ai_response = f"Error: {str(e)}"
-            logger.error(f"Error in process_chat: {str(e)}")
-        user_queues[thread_id].task_done()
-        return ai_response
-
-# Load predefined vector database
+    
+# RAG vector database
 try:
     predefined_path = "vectorstore/emsalkarar_faiss"
     if os.path.exists(predefined_path):
@@ -189,7 +164,60 @@ try:
 except Exception as e:
     print(f"🚨 EmsalKarar vectorstore yüklenemedi: {e}")
 
-# Ensure uploads directory exists
+@app.route('/process_chat', methods=['POST'])
+def process_chat(thread_id: str):
+    """Process chat messages and generate AI responses"""
+    while True:
+        prompt = user_queues[thread_id].get()
+        history = user_threads[thread_id]
+        history.add_user_message(prompt)
+        
+        messages = [{"role": "system", "content": "You are AI-ttorney, an AI assistant trained only on Turkish financial law. You should politely decline to answer questions outside this field, such as criminal, family, or civil law, by explaining that you're only able to assist with Turkish financial legal matters. You can vary your wording. Here are a few examples of how you might respond: - 'Bu konuda yardımcı olamıyorum çünkü yalnızca Türkiye finansal hukuku üzerine eğitildim.' - 'Üzgünüm, yalnızca Türkiye'nin finansal hukuku hakkında bilgi verebiliyorum.' - 'Bu konu benim uzmanlık alanıma girmiyor; finansal hukuk hakkında sorularınızı yanıtlayabilirim.' If the user greets you (e.g., 'selam', 'merhaba'), you can greet them back and remind them of your scope."}]
+        
+        for msg in history.messages:
+            role = "user" if msg.type == "human" else "assistant"
+            messages.append({"role": role, "content": msg.content})
+        
+        try:
+            response = openai.ChatCompletion.create(
+                model="ft:gpt-4o-mini-2024-07-18:aittorney::BMdnAFFk",
+                messages=messages,
+                temperature=0.5,
+                max_tokens=500
+            )
+            ai_response = response['choices'][0]['message']['content']
+            history.add_ai_message(ai_response)
+            
+        # Store messages in the database
+            db = next(get_db())
+            try:
+                # Get the session ID from thread metadata
+                session_id = thread_metadata[thread_id].db_session_id
+                if not session_id:
+                    logger.error(f"No session ID found for thread {thread_id}")
+                    return ai_response
+                
+                # Store user message
+                create_chat_message(db, session_id, "user", prompt)
+                # Store AI response
+                create_chat_message(db, session_id, "assistant", ai_response)
+                
+                db.commit()
+            except Exception as e:
+                logger.error(f"Error storing messages in database: {str(e)}")
+                db.rollback()
+            finally:
+                db.close()
+        except Exception as e:
+            ai_response = f"Error: {str(e)}"
+            logger.error(f"Error in process_chat: {str(e)}")
+        
+        user_queues[thread_id].task_done()
+        return ai_response
+
+
+
+# file upload için
 UPLOAD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'uploads')
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
@@ -292,11 +320,12 @@ def upload_document():
         logger.error(traceback.format_exc())
         return jsonify({"error": str(e)}), 500
 
+
 @app.route('/generate', methods=['POST'])
 def generate():
     try:
-        data = request.json
-        prompt = data.get("prompt", "")
+    data = request.json
+    prompt = data.get("prompt", "")
         thread_id = data.get("thread_id")
         user_id = data.get("user_id")
         document_id = data.get("document_id")
@@ -304,9 +333,9 @@ def generate():
         
         logger.info(f"Generate request - prompt: {prompt}, thread_id: {thread_id}, user_id: {user_id}, document_id: {document_id}")
         
-        if not prompt:
+    if not prompt:
             logger.warning("No prompt provided")
-            return jsonify({"error": "Prompt is required"}), 400
+        return jsonify({"error": "Prompt is required"}), 400
 
         if not user_id:
             logger.warning("No user ID provided")
@@ -314,12 +343,61 @@ def generate():
 
         # Create new thread if requested or if no thread_id exists
         if is_new_thread or not thread_id:
-            thread_id = str(uuid.uuid4())
-            user_threads[thread_id] = ChatMessageHistory()
-            user_queues[thread_id] = queue.Queue()
-            thread_metadata[thread_id] = ThreadMetadata(thread_id, user_id)
-            thread_metadata[thread_id].title = "New Chat"
-            logger.info(f"Created new thread: {thread_id}")
+            # Create new database session
+            db = next(get_db())
+            try:
+                # Use first few words of the prompt as the title
+                title = " ".join(prompt.split()[:5]) + "..."
+                new_session = create_chat_session(db, user_id, title)
+                db.commit()
+                
+                # Use the database session ID as the thread ID
+                thread_id = str(new_session.id)
+                
+                # Initialize thread metadata
+                user_threads[thread_id] = ChatMessageHistory()
+                thread_metadata[thread_id] = ThreadMetadata(thread_id, user_id)
+                thread_metadata[thread_id].db_session_id = new_session.id
+                thread_metadata[thread_id].title = title
+                
+            except Exception as e:
+                logger.error(f"Error creating database session: {str(e)}")
+                db.rollback()
+                return jsonify({"error": str(e)}), 500
+            finally:
+                db.close()
+        else:
+            # Get existing session from database
+            db = next(get_db())
+            try:
+                session = db.query(ChatSession).filter(
+                    ChatSession.id == int(thread_id),
+                    ChatSession.user_id == user_id
+                ).first()
+                if not session:
+                    return jsonify({"error": "Thread not found"}), 404
+                
+                # Load existing messages from database
+                messages = get_session_messages(db, session.id)
+                if thread_id not in user_threads:
+                    user_threads[thread_id] = ChatMessageHistory()
+                if thread_id not in thread_metadata:
+                    thread_metadata[thread_id] = ThreadMetadata(thread_id, user_id)
+                
+                # Add messages to chat history
+                for msg in messages:
+                    if msg.role == "user":
+                        user_threads[thread_id].add_user_message(msg.content)
+                    else:
+                        user_threads[thread_id].add_ai_message(msg.content)
+                
+                thread_metadata[thread_id].db_session_id = session.id
+                thread_metadata[thread_id].title = session.session_name
+            except Exception as e:
+                logger.error(f"Error getting database session: {str(e)}")
+                return jsonify({"error": str(e)}), 500
+            finally:
+                db.close()
         
         # Handle document-specific queries
         if document_id and document_id in document_agents:
@@ -328,7 +406,9 @@ def generate():
                 agent = document_agents[document_id]
                 response = agent.invoke({
                     "input": prompt,
-                    "chat_history": []
+                    "chat_history": [],
+                    "system_message": "You are AI-ttorney, an AI assistant trained only on Turkish financial law. You should politely decline to answer questions outside this field, such as criminal, family, or civil law, by explaining that you're only able to assist with Turkish financial legal matters. You can vary your wording. Here are a few examples of how you might respond: - 'Bu konuda yardımcı olamıyorum çünkü yalnızca Türkiye finansal hukuku üzerine eğitildim.' - 'Üzgünüm, yalnızca Türkiye'nin finansal hukuku hakkında bilgi verebiliyorum.' - 'Bu konu benim uzmanlık alanıma girmiyor; finansal hukuk hakkında sorularınızı yanıtlayabilirim.' If the user greets you (e.g., 'selam', 'merhaba'), you can greet them back and remind them of your scope."
+
                 })
                 
                 vector_store = vector_stores[document_id]
@@ -355,38 +435,91 @@ def generate():
         # Ensure thread exists
         if thread_id not in user_threads:
             user_threads[thread_id] = ChatMessageHistory()
-            user_queues[thread_id] = queue.Queue()
+            
             thread_metadata[thread_id] = ThreadMetadata(thread_id, user_id)
         
         # Verify thread belongs to user
         if thread_metadata[thread_id].user_id != user_id:
             return jsonify({"error": "Unauthorized access to thread"}), 403
         
-        # Process the chat and get response
-        user_queues[thread_id].put(prompt)
-        ai_response = process_chat(thread_id)
+        # Add user message to chat history
+        user_threads[thread_id].add_user_message(prompt)
+        
+        # Prepare messages for OpenAI
+        messages = [
+            {"role": "system", "content": "AI-ttorney is a financial law advice chatbot and will only answer questions related to Turkey's financial law. For all other questions, it must say that it is only trained for Turkey's financial law."}
+        ]
+
+        # Add chat history
+        for msg in user_threads[thread_id].messages:
+            role = "user" if msg.type == "human" else "assistant"
+            messages.append({"role": role, "content": msg.content})
+        
+    try:
+            # Get AI response
+        response = openai.ChatCompletion.create(
+                model="ft:gpt-4o-mini-2024-07-18:aittorney::BMdnAFFk",
+                messages=messages,
+            max_tokens=100
+        )
+            ai_response = response['choices'][0]['message']['content']
+            
+            # Add AI response to chat history
+            user_threads[thread_id].add_ai_message(ai_response)
+            
+            # Store messages in database
+            db = next(get_db())
+            try:
+                session_id = thread_metadata[thread_id].db_session_id
+                if session_id:
+                    # Store user message
+                    create_chat_message(db, session_id, "user", prompt)
+                    # Store AI response
+                    create_chat_message(db, session_id, "assistant", ai_response)
+                    db.commit()
+            except Exception as e:
+                logger.error(f"Error storing messages in database: {str(e)}")
+                db.rollback()
+            finally:
+                db.close()
         
         # Update thread metadata
-        thread_metadata[thread_id].last_updated = datetime.now()
-        thread_metadata[thread_id].last_message = ai_response
-        thread_metadata[thread_id].is_initial = False
+            thread_metadata[thread_id].last_updated = datetime.now()
+            thread_metadata[thread_id].last_message = ai_response
+            thread_metadata[thread_id].is_initial = False
         
         # Update title only for the first message in a new thread
-        if thread_metadata[thread_id].title == "New Chat":
-            words = prompt.split()
-            if len(words) >= 3:
-                title = ' '.join(words[:3])
-            else:
-                title = prompt
-            thread_metadata[thread_id].title = title
+        # Update title only for the first message in a new thread
+            if thread_metadata[thread_id].title == "New Chat":
+                title = " ".join(prompt.split()[:5]) + "..."
+                thread_metadata[thread_id].title = title
+                
+                # Update session name in database
+                db = next(get_db())
+                try:
+                    session = db.query(ChatSession).filter(
+                        ChatSession.id == thread_metadata[thread_id].db_session_id
+                    ).first()
+                    if session:
+                        session.session_name = title
+                        db.commit()
+                except Exception as e:
+                    logger.error(f"Error updating session name: {str(e)}")
+                    db.rollback()
+                finally:
+                    db.close()
         
-        return jsonify({
-            "response": ai_response,
-            "thread_id": thread_id,
-            "title": thread_metadata[thread_id].title,
-            "user_message": prompt,
-            "ai_message": ai_response
-        })
+            return jsonify({
+                "response": ai_response,
+                "thread_id": thread_id,
+                "title": thread_metadata[thread_id].title,
+                "user_message": prompt,
+                "ai_message": ai_response
+            })
+        except Exception as e:
+            logger.error(f"Error generating response: {str(e)}")
+            logger.error(traceback.format_exc())
+            return jsonify({"error": str(e)}), 500
 
     except Exception as e:
         logger.error(f"Error in generate: {str(e)}")
@@ -403,24 +536,41 @@ def create_thread():
         if not user_id:
             return jsonify({"error": "User ID is required"}), 400
         
-        thread_id = str(uuid.uuid4())
-        user_threads[thread_id] = ChatMessageHistory()
-        user_queues[thread_id] = queue.Queue()
+        # Create new database session
+        db = next(get_db())
+        try:
+            new_session = create_chat_session(db, user_id, "New Chat")
+            db.commit()
+            
+            # Use the database session ID as the thread ID
+            thread_id = str(new_session.id)
+            
+            # Initialize thread metadata
+            user_threads[thread_id] = ChatMessageHistory()
+            user_queues[thread_id] = queue.Queue()
+            thread_metadata[thread_id] = ThreadMetadata(thread_id, user_id)
+            thread_metadata[thread_id].db_session_id = new_session.id
+            thread_metadata[thread_id].title = "New Chat"
         
-        metadata = ThreadMetadata(thread_id, user_id)
-        metadata.title = "New Chat"
-        thread_metadata[thread_id] = metadata
-        
-        return jsonify({
-            "thread_id": thread_id,
-            "title": "New Chat",
-            "created_at": metadata.created_at.isoformat(),
-            "last_updated": metadata.last_updated.isoformat(),
-            "is_initial": True
-        })
+            return jsonify({
+                "thread_id": thread_id,
+                "title": "New Chat",
+                "created_at": new_session.created_at.isoformat(),
+                "last_updated": new_session.updated_at.isoformat(),
+                "is_initial": True
+            })
+
+        except Exception as e:
+            logger.error(f"Error creating thread: {str(e)}")
+            logger.error(traceback.format_exc())
+            db.rollback()
+            return jsonify({"error": str(e)}), 500
+        finally:
+            db.close()
 
     except Exception as e:
-        logger.error(f"Error creating thread: {str(e)}")
+        logger.error(f"Error in create_thread: {str(e)}")
+        logger.error(traceback.format_exc())
         return jsonify({"error": str(e)}), 500
 
 @app.route('/get_all_threads', methods=['GET'])
@@ -430,20 +580,37 @@ def get_all_threads():
     if not user_id:
         return jsonify({"error": "User ID is required"}), 400
     
-    threads_data = []
-    for thread_id, metadata in thread_metadata.items():
-        if metadata.user_id == user_id:
+    # Get sessions from database
+    db = next(get_db())
+    try:
+        sessions = db.query(ChatSession).filter(ChatSession.user_id == user_id).all()
+        threads_data = []
+        
+        for session in sessions:
+            # Get the last message for this session
+            last_message = db.query(ChatMessage).filter(
+                ChatMessage.session_id == session.id
+            ).order_by(ChatMessage.timestamp.desc()).first()
+            
             threads_data.append({
-                'thread_id': thread_id,
-                'title': metadata.title,
-                'created_at': metadata.created_at.isoformat(),
-                'last_updated': metadata.last_updated.isoformat(),
-                'last_message': metadata.last_message,
-                'is_initial': metadata.is_initial
+                'thread_id': str(session.id),
+                'title': session.session_name or "New Chat",
+                'created_at': session.created_at.isoformat(),
+                'last_updated': session.updated_at.isoformat(),
+                'last_message': last_message.content if last_message else None,
+                'is_initial': not last_message
             })
-    # Sort by creation time, newest first
-    sorted_threads = sorted(threads_data, key=lambda x: x['created_at'], reverse=True)
-    return jsonify({'threads': sorted_threads})
+            
+        # Sort by last updated time, newest first
+        threads_data.sort(key=lambda x: x['last_updated'], reverse=True)
+        return jsonify({'threads': threads_data})
+        
+    except Exception as e:
+        logger.error(f"Error getting threads from database: {str(e)}")
+        logger.error(traceback.format_exc())
+        return jsonify({"error": str(e)}), 500
+    finally:
+        db.close()
 
 @app.route('/get_thread_history', methods=['POST'])
 def get_thread_history():
@@ -455,20 +622,52 @@ def get_thread_history():
     if not thread_id or not user_id:
         return jsonify({"error": "Thread ID and User ID are required"}), 400
     
-    # Verify thread belongs to user
-    if thread_id not in thread_metadata or thread_metadata[thread_id].user_id != user_id:
-        return jsonify({"error": "Thread not found or unauthorized access"}), 404
-    
-    if thread_id in user_threads:
-        history = user_threads[thread_id].messages
-        return jsonify({"history": [
-            {
-                "role": "user" if msg.type == "human" else "assistant",
+    db = next(get_db())
+    try:
+        # Get session from database
+        session = db.query(ChatSession).filter(
+            ChatSession.id == int(thread_id),
+            ChatSession.user_id == user_id
+        ).first()
+        
+        if not session:
+            return jsonify({"error": "Thread not found"}), 404
+            
+        # Get all messages for this session
+        messages = db.query(ChatMessage).filter(
+            ChatMessage.session_id == session.id
+        ).order_by(ChatMessage.timestamp.asc()).all()
+        
+        # Convert messages to the required format
+        history = []
+        for msg in messages:
+            history.append({
+                "role": msg.role,
                 "content": msg.content,
-                "timestamp": datetime.now().isoformat()
-            } for msg in history
-        ]})
-    return jsonify({"history": []})
+                "timestamp": msg.timestamp.isoformat()
+            })
+            
+        # Update the in-memory history
+        if thread_id in user_threads:
+            user_threads[thread_id].clear()
+            for msg in history:
+                if msg["role"] == "user":
+                    user_threads[thread_id].add_user_message(msg["content"])
+                else:
+                    user_threads[thread_id].add_ai_message(msg["content"])
+        
+        return jsonify({
+            "history": history,
+            "title": session.session_name or "New Chat",
+            "thread_id": thread_id
+        })
+
+    except Exception as e:
+        logger.error(f"Error getting thread history from database: {str(e)}")
+        logger.error(traceback.format_exc())
+        return jsonify({"error": str(e)}), 500
+    finally:
+        db.close()
 
 @app.route('/delete_thread', methods=['POST'])
 def delete_thread():
@@ -480,30 +679,50 @@ def delete_thread():
     if not thread_id or not user_id:
         return jsonify({"error": "Thread ID and User ID are required"}), 400
     
-    # Verify thread belongs to user
-    if thread_id not in thread_metadata or thread_metadata[thread_id].user_id != user_id:
-        return jsonify({"error": "Thread not found or unauthorized access"}), 404
-    
-    if thread_id in user_threads:
-        del user_threads[thread_id]
-    if thread_id in user_queues:
-        del user_queues[thread_id]
-    if thread_id in thread_metadata:
-        del thread_metadata[thread_id]
-    
-    return jsonify({"success": True})
+    db = next(get_db())
+    try:
+        # Get session from database
+        session = db.query(ChatSession).filter(
+            ChatSession.id == int(thread_id),
+            ChatSession.user_id == user_id
+        ).first()
+        
+        if not session:
+            return jsonify({"error": "Thread not found"}), 404
+            
+        # Delete the session (this will cascade delete messages due to the relationship)
+        db.delete(session)
+        db.commit()
+        
+        # Clean up in-memory data
+        if thread_id in user_threads:
+            del user_threads[thread_id]
+        if thread_id in user_queues:
+            del user_queues[thread_id]
+        if thread_id in thread_metadata:
+            del thread_metadata[thread_id]
+        
+        return jsonify({"message": "Thread deleted successfully"})
+        
+    except Exception as e:
+        logger.error(f"Error deleting thread: {str(e)}")
+        logger.error(traceback.format_exc())
+        db.rollback()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        db.close()
 
 @app.route('/clear', methods=['POST'])
 def clear():
     try:
-        session.pop('messages', None)
+    session.pop('messages', None)
         document_id = request.json.get("document_id")
         if document_id:
             if document_id in conversation_chains:
                 conversation_chains[document_id].memory.clear()
             if document_id in document_agents:
                 document_agents[document_id].memory.clear()
-        return jsonify({"message": "Conversation history cleared."})
+    return jsonify({"message": "Conversation history cleared."})
     except Exception as e:
         logger.error(f"Clear error: {str(e)}")
         return jsonify({"error": str(e)}), 500
