@@ -1,0 +1,70 @@
+version: '3.8'
+
+services:
+  # Frontend service (React + Vite)
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    # No ports exposed here; Nginx will handle it
+    environment:
+      - NODE_ENV=development
+      - VITE_API_URL=/api
+      - VITE_CLERK_PUBLISHABLE_KEY=pk_test_dXAta2lkLTQ4LmNsZXJrLmFjY291bnRzLmRldiQ
+    # volumes:
+    #   - ./src:/app/src
+    #   - ./index.html:/app/index.html
+    #   - ./vite.config.ts:/app/vite.config.ts
+    depends_on:
+      - backend
+
+  # Backend service (FastAPI)
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # No ports exposed here; Nginx will handle it
+    environment:
+      - PYTHONUNBUFFERED=1
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_HOST=db
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=chat_history
+      - OPENAI_API_KEY=YOUR_OPENAI_KEY
+    volumes:
+      - ./vectorstore:/app/vectorstore  
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # PostgreSQL service
+  db:
+    image: postgres:16
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=chat_history
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  nginx:
+    image: nginx:latest
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf
+      - ./frontend/dist:/usr/share/nginx/html
+    depends_on:
+      - frontend
+      - backend
+
+volumes:
+  postgres_data:
