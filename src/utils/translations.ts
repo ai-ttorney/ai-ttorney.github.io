@@ -1,0 +1,36 @@
+import { TranslationType } from "../types/chatTypes";
+
+export const translations: Record<'en' | 'tr', TranslationType> = {
+  en: {
+    welcome: "Welcome",
+    newChat: "+ New Chat",
+    settings: "Settings",
+    theme: "Theme",
+    language: "Language",
+    darkMode: "Dark Mode",
+    lightMode: "Light Mode",
+    english: "English",
+    turkish: "Turkish",
+    typeFirstMessage: "Type your first message here...",
+    typeMessage: "Type your message here...",
+    send: "Send",
+    loading: "Loading...",
+    deleteConfirm: "Are you sure you want to delete this chat?",
+  },
+  tr: {
+    welcome: "Hoş Geldiniz",
+    newChat: "+ Yeni Sohbet",
+    settings: "Ayarlar",
+    theme: "Tema",
+    language: "Dil",
+    darkMode: "Karanlık Mod",
+    lightMode: "Aydınlık Mod",
+    english: "İngilizce",
+    turkish: "Türkçe",
+    typeFirstMessage: "İlk mesajınızı buraya yazın...",
+    typeMessage: "Mesajınızı buraya yazın...",
+    send: "Gönder",
+    loading: "Yükleniyor...",
+    deleteConfirm: "Bu sohbeti silmek istediğinizden emin misiniz?",
+  },
+};
